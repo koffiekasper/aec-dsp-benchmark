@@ -1,50 +1,38 @@
 import numpy as np
 
 class LMS:
-    def __init__(self, M=10, lr=None):
+    def __init__(self, M = 1280):
         self.M = M
-        self.lr = lr
-        self.b = np.zeros(self.M) 
-        
-    def fit_transform(self, f, d):
-        n_time = f.shape[0]
-        loss = []
-        y = np.copy(f)
 
+    def fit_transform(self, f, d, lr=None):
+        b = np.zeros(self.M)
+        n_time = min(f.shape[0], d.shape[0])
+        f = f.astype(np.float64)[:n_time] / 32768.0
+        d = d.astype(np.float64)[:n_time] / 32768.0
+        
+        if lr == None:
+            lr, _ = self._find_lr(f) 
+
+        y = np.zeros(n_time)
+        
         for n in range(self.M - 1, n_time):
             f_window = f[n - self.M + 1:n + 1][::-1]
-            y_n = np.dot(f_window, self.b)
-
+            y_n = np.dot(f_window, b)
             y[n] = y_n
 
             e = d[n] - y_n
-            loss.append(e ** 2)
 
-            self.b = self.b + self.lr * e * f_window
+            b = b + lr * e * f_window
+        
+        return d - y
 
-        return loss, y
+    def _find_lr(self, f, safety=0.1):
+        X = np.lib.stride_tricks.sliding_window_view(
+            np.asarray(f, dtype=np.float64),
+            self.M
+        )
 
-    def transform(self, f):
-        n_time = f.shape[0]
-        y = np.copy(f)
+        max_energy = np.max(np.sum(X * X, axis=1))
 
-        for n in range(self.M - 1, n_time):
-            f_window = f[n - self.M + 1:n + 1][::-1]
-            y_n = np.dot(f_window, self.b)
-
-            y[n] = y_n
-
-        return y
-                
-    def find_lr(self, f, safety=0.1):
-        f = np.asarray(f, dtype=np.float64)
-
-        X = np.lib.stride_tricks.sliding_window_view(f, self.M)
-        X = X[:, ::-1]
-
-        R = (X.T @ X) / len(X)
-        lambda_max = np.linalg.eigvalsh(R)[-1]
-        lr_max = 2.0 / lambda_max
-        lr = safety * lr_max
-
-        return lr, lr_max
+        lr_max = 2.0 / max_energy
+        return safety * lr_max, lr_max
