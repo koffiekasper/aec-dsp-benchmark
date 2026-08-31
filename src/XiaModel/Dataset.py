@@ -3,133 +3,160 @@ import torch
 import torch.nn.functional as F
 from pathlib import Path
 import random
+import numpy as np
 import pandas as pd
 from scipy.io import wavfile
 
 
-class FarEndSingleTalkDataset(Dataset):
+class AECDataset(Dataset):
+    FILES = {
+        "far_lpb": "_farend_singletalk_lpb.wav",
+        "far_mic": "_farend_singletalk_mic.wav",
+        "far_move_lpb": "_farend_singletalk_with_movement_lpb.wav",
+        "far_move_mic": "_farend_singletalk_with_movement_mic.wav",
+        "near_mic": "_nearend_singletalk_mic.wav",
+        "dt_lpb": "_doubletalk_lpb.wav",
+        "dt_mic": "_doubletalk_mic.wav",
+        "dt_move_lpb": "_doubletalk_with_movement_lpb.wav",
+        "dt_move_mic": "_doubletalk_with_movement_mic.wav",
+    }
+
     def __init__(
         self,
         path,
         seed=None,
-        n=-1,
         sample_rate=16000,
-        chunk_seconds=4
+        chunk_seconds=4,
+        ser_range=(-10, 10),
     ):
         self.path = Path(path)
+        self.crop_n = sample_rate * chunk_seconds
+        self.ser_range = ser_range
 
         if seed is not None:
             random.seed(seed)
 
-        self.n = n
-        self.sample_rate = sample_rate
-        self.crop_n = sample_rate * chunk_seconds
-
-        self.df = pd.DataFrame(
-            columns=[
-                "farend_mic_path",
-                "farend_lpb_path",
-                "nearend_mic_path"
-            ]
-        )
-
-        self._populate_df()
+        self.df = self._build_df()
 
     def __len__(self):
         return len(self.df)
 
-    def _populate_df(self):
-        farend_mic_paths = sorted(
-            self.path.glob("*farend_singletalk_mic.wav")
-        )
+    def _build_df(self):
+        grouped = {}
 
-        pairs = []
+        for p in self.path.glob("*.wav"):
+            for key, ending in self.FILES.items():
+                if p.name.lower().endswith(ending):
+                    guid = p.name[:-len(ending)]
+                    grouped.setdefault(guid, {})[key] = p
+                    break
 
-        for farend_mic_path in farend_mic_paths:
-            farend_lpb_path = farend_mic_path.with_name(
-                farend_mic_path.name.replace(
-                    "farend_singletalk_mic.wav",
-                    "farend_singletalk_lpb.wav"
-                )
-            )
+        scenarios = [
+            # name, mic, lpb, near, echo, supervised
+            ("farend", "far_mic", "far_lpb", None, None, True),
+            ("farend_move", "far_move_mic", "far_move_lpb", None, None, True),
+            ("nearend", "near_mic", None, "near_mic", None, True),
+            ("synthetic_dt", None, "far_lpb", "near_mic", "far_mic", True),
+            ("synthetic_dt_move", None, "far_move_lpb", "near_mic", "far_move_mic", True),
+            ("real_dt", "dt_mic", "dt_lpb", None, None, False),
+            ("real_dt_move", "dt_move_mic", "dt_move_lpb", None, None, False),
+        ]
 
-            nearend_mic_path = farend_mic_path.with_name(
-                farend_mic_path.name.replace(
-                    "farend_singletalk_mic.wav",
-                    "nearend_singletalk_mic.wav"
-                )
-            )
+        rows = []
 
-            if farend_lpb_path.exists() and nearend_mic_path.exists():
-                pairs.append({
-                    "farend_mic_path": farend_mic_path,
-                    "farend_lpb_path": farend_lpb_path,
-                    "nearend_mic_path": nearend_mic_path
-                })
+        for guid, g in grouped.items():
+            for scenario, mic, lpb, near, echo, supervised in scenarios:
+                needed = [x for x in [mic, lpb, near, echo] if x]
 
-        if self.n != -1:
-            pairs = random.sample(
-                pairs,
-                min(self.n, len(pairs))
-            )
+                if all(x in g for x in needed):
+                    rows.append({
+                        "guid": guid,
+                        "scenario": scenario,
+                        "mic": g.get(mic),
+                        "lpb": g.get(lpb),
+                        "near": g.get(near),
+                        "echo": g.get(echo),
+                        "supervised": supervised,
+                    })
 
-        self.df = pd.DataFrame(pairs)
+        return pd.DataFrame(rows)
 
-    def _load_audio(self, idx):
-        row = self.df.iloc[idx]
+    def _load(self, path):
+        _, x = wavfile.read(path)
 
-        _, farend_mic = wavfile.read(row["farend_mic_path"])
-        _, farend_lpb = wavfile.read(row["farend_lpb_path"])
-        _, nearend_mic = wavfile.read(row["nearend_mic_path"])
+        dtype = x.dtype
+        x = x.astype(np.float32)
 
-        farend_mic = torch.from_numpy(
-            farend_mic.astype("float32") / 32768.0
-        )
+        if np.issubdtype(dtype, np.integer):
+            x /= 32768.0
 
-        farend_lpb = torch.from_numpy(
-            farend_lpb.astype("float32") / 32768.0
-        )
+        if x.ndim > 1:
+            x = x.mean(axis=1)
 
-        nearend_mic = torch.from_numpy(
-            nearend_mic.astype("float32") / 32768.0
-        )
+        return torch.from_numpy(x)
 
-        n = min(
-            len(farend_mic),
-            len(farend_lpb),
-            len(nearend_mic)
-        )
-
-        return (
-            farend_mic[:n],
-            farend_lpb[:n],
-            nearend_mic[:n]
-        )
-
-    def __getitem__(self, idx):
-        farend_mic, farend_lpb, nearend_mic = self._load_audio(idx)
-
-        n = len(farend_mic)
+    def _crop(self, *xs):
+        n = min(map(len, xs))
+        xs = [x[:n] for x in xs]
 
         if n >= self.crop_n:
             start = random.randint(0, n - self.crop_n)
-            end = start + self.crop_n
+            return [x[start:start + self.crop_n] for x in xs]
 
-            farend_mic = farend_mic[start:end]
-            farend_lpb = farend_lpb[start:end]
-            nearend_mic = nearend_mic[start:end]
+        return [
+            F.pad(x, (0, self.crop_n - n))
+            for x in xs
+        ]
+
+    def _mix(self, near, echo):
+        ser_db = random.uniform(*self.ser_range)
+
+        near_rms = near.square().mean().sqrt()
+        echo_rms = echo.square().mean().sqrt()
+
+        alpha = near_rms / (
+            echo_rms * 10 ** (ser_db / 20) + 1e-8
+        )
+
+        return near + alpha * echo
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        s = row["scenario"]
+
+        if s == "nearend":
+            near, = self._crop(self._load(row["near"]))
+            mic = target = near
+            lpb = torch.zeros_like(near)
+
+        elif s.startswith("farend"):
+            mic, lpb = self._crop(
+                self._load(row["mic"]),
+                self._load(row["lpb"]),
+            )
+            target = torch.zeros_like(mic)
+
+        elif s.startswith("synthetic"):
+            near, echo, lpb = self._crop(
+                self._load(row["near"]),
+                self._load(row["echo"]),
+                self._load(row["lpb"]),
+            )
+            mic = self._mix(near, echo)
+            target = near
 
         else:
-            pad_n = self.crop_n - n
-
-            farend_mic = F.pad(farend_mic, (0, pad_n))
-            farend_lpb = F.pad(farend_lpb, (0, pad_n))
-            nearend_mic = F.pad(nearend_mic, (0, pad_n))
+            mic, lpb = self._crop(
+                self._load(row["mic"]),
+                self._load(row["lpb"]),
+            )
+            target = torch.zeros_like(mic)
 
         return {
-            "farend_mic": farend_mic,
-            "farend_lpb": farend_lpb,
-            "nearend_mic": nearend_mic,
-            "length": self.crop_n,
-            "index": idx
+            "mic": mic,
+            "lpb": lpb,
+            "target": target,
+            "scenario": s,
+            "supervised": row["supervised"],
+            "guid": row["guid"],
         }

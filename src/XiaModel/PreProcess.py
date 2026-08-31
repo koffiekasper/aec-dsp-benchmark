@@ -58,7 +58,6 @@ def STFTLogScaler(
 
     batch_size = far_mic.shape[0]
 
-    # [2B, samples]
     x = torch.cat(
         [far_mic, far_lpb],
         dim=0
@@ -70,7 +69,6 @@ def STFTLogScaler(
         device=x.device
     )
 
-    # [2B, 161, T]
     stft = torch.stft(
         x,
         n_fft=n_fft,
@@ -92,17 +90,14 @@ def STFTLogScaler(
         min=-120.0
     )
 
-    # Split mic and loopback back apart
-    mic = log_power_db[:batch_size]   # [B, 161, T]
-    lpb = log_power_db[batch_size:]   # [B, 161, T]
+    mic = log_power_db[:batch_size]
+    lpb = log_power_db[batch_size:]
 
-    # Concatenate frequency features
     features = torch.cat(
         [mic, lpb],
         dim=1
     )
 
-    # [B, 322, T]
     return features
 import torch
 
@@ -146,7 +141,6 @@ def STFTLogScaler(
 
     mag = spec.abs()
 
-    # Microsoft-style network features
     scaled = torch.log10(
         torch.clamp(mag.square(), min=1e-12)
     ) / 20.0
@@ -154,15 +148,13 @@ def STFTLogScaler(
     mic_scaled = scaled[:B]
     lpb_scaled = scaled[B:2*B]
 
-    # [B, 322, T]
     features = torch.cat(
         [mic_scaled, lpb_scaled],
         dim=1
     )
 
-    # Raw magnitudes for loss
-    mic_mag = mag[:B]       # [B, 161, T]
-    near_mag = mag[2*B:]    # [B, 161, T]
+    mic_mag = mag[:B]
+    near_mag = mag[2*B:]
 
     return features, mic_mag, near_mag
 
@@ -170,7 +162,6 @@ def InverseSTFT(output,
                 n_fft,
                 hop,
                 win_l):
-    # [b, 161, T]
     time_domain = torch.istft(
         input=output,
         n_fft = n_fft,

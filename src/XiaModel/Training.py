@@ -1,11 +1,11 @@
-from src.XiaModel.Dataset import FarEndSingleTalkDataset
+from src.XiaModel.Dataset import AECDataset
 from src.XiaModel.PreProcess import OnlineFDNormalizer, STFTLogScaler, InverseSTFT
 
 from pathlib import Path
 
 import torch
 from torch.nn import MSELoss
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 
 
 from tqdm.auto import tqdm, trange
@@ -27,19 +27,12 @@ class Trainer:
                  device=None,
                  checkpoint_dir=None,
                  ):
-        self.dataset = FarEndSingleTalkDataset(data_path, seed, n)
+        self.dataset = AECDataset(data_path, seed, n)
 
-        n_train = int(len(self.dataset) * train_fraction)
-        n_test = len(self.dataset) - n_train
-        if seed:
-            generator = torch.Generator().manual_seed(seed)
-        else:
-            generator = None
-        
-        self.train_dataset, self.test_dataset = random_split(
+        self.train_dataset, self.test_dataset = self.split_by_guid(
             self.dataset,
-            [n_train, n_test] ,
-            generator=generator
+            train_fraction=train_fraction,
+            seed=seed
         )
         
         self.model = model
@@ -66,55 +59,19 @@ class Trainer:
         )
 
     def preprocess(self, batch):
-        far_lpb = torch.stack([
-            d["farend_lpb"] for d in batch
-        ])
-
-        far_mic = torch.stack([
-            d["farend_mic"] for d in batch
-        ])
-
-        near_mic = torch.stack([
-            d["nearend_mic"] for d in batch
-        ])
-
-        B = far_mic.size(0)
-
-        ser_db = torch.empty(B, 1).uniform_(-10, 10)
-
-        near_rms = near_mic.square().mean(
-            dim=1,
-            keepdim=True
-        ).sqrt()
-
-        echo_rms = far_mic.square().mean(
-            dim=1,
-            keepdim=True
-        ).sqrt()
-
-        alpha = (
-            near_rms
-            / (
-                echo_rms
-                * 10 ** (ser_db / 20)
-                + 1e-8
-            )
-        )
-
-        mixed_mic = (
-            near_mic
-            + alpha * far_mic
-        )
+        mic = torch.stack([x["mic"] for x in batch])
+        lpb = torch.stack([x["lpb"] for x in batch])
+        target = torch.stack([x["target"] for x in batch])
 
         return STFTLogScaler(
-            far_mic=mixed_mic,
-            far_lpb=far_lpb,
-            near_mic=near_mic,
+            far_mic=mic,
+            far_lpb=lpb,
+            near_mic=target,
             n_fft=self.dtf_size,
             hop=self.hop,
-            window_l=self.window_l
+            window_l=self.window_l,
         )
-    
+        
     def target_f(self, batch_T):
         l = batch_T.size(1) / 2
         return batch_T[:,l:,:]
@@ -221,6 +178,33 @@ class Trainer:
                 )
 
         return epoch_losses
+
+    def split_by_guid(self, dataset, train_fraction=0.8, seed=None):
+        df = dataset.df
+        df = df[df["supervised"]]
+
+        guids = list(df["guid"].unique())
+
+        rng = random.Random(seed)
+        rng.shuffle(guids)
+
+        cut = int(len(guids) * train_fraction)
+
+        train_guids = set(guids[:cut])
+        val_guids = set(guids[cut:])
+
+        train_idx = df.index[
+            df["guid"].isin(train_guids)
+        ].tolist()
+
+        val_idx = df.index[
+            df["guid"].isin(val_guids)
+        ].tolist()
+
+        return (
+            Subset(dataset, train_idx),
+            Subset(dataset, val_idx),
+        )
 
     def _initial_hidden(self, batch_size): 
         h01 = torch.zeros( 1, batch_size, self.hidden_size, device=self.device, ) 
