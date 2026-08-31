@@ -1,6 +1,8 @@
 from src.XiaModel.Dataset import FarEndSingleTalkDataset
 from src.XiaModel.PreProcess import OnlineFDNormalizer, STFTLogScaler, InverseSTFT
 
+from pathlib import Path
+
 import torch
 from torch.nn import MSELoss
 from torch.utils.data import DataLoader, random_split
@@ -23,6 +25,7 @@ class Trainer:
                  dft_size=320,
                  train_fraction=0.8,
                  device=None,
+                 checkpoint_dir=None,
                  ):
         self.dataset = FarEndSingleTalkDataset(data_path, seed, n)
 
@@ -51,6 +54,9 @@ class Trainer:
         self.window_l = window_l
         
         self.device = device
+        self.checkpoint_dir = (
+            Path(checkpoint_dir) if checkpoint_dir is not None else None
+        )
         
         
         self.loss_function = MSELoss(reduction='none')
@@ -72,8 +78,33 @@ class Trainer:
             d["nearend_mic"] for d in batch
         ])
 
-        # Synthetic double-talk mic
-        mixed_mic = far_mic + near_mic
+        B = far_mic.size(0)
+
+        ser_db = torch.empty(B, 1).uniform_(-10, 10)
+
+        near_rms = near_mic.square().mean(
+            dim=1,
+            keepdim=True
+        ).sqrt()
+
+        echo_rms = far_mic.square().mean(
+            dim=1,
+            keepdim=True
+        ).sqrt()
+
+        alpha = (
+            near_rms
+            / (
+                echo_rms
+                * 10 ** (ser_db / 20)
+                + 1e-8
+            )
+        )
+
+        mixed_mic = (
+            near_mic
+            + alpha * far_mic
+        )
 
         return STFTLogScaler(
             far_mic=mixed_mic,
@@ -85,12 +116,10 @@ class Trainer:
         )
     
     def target_f(self, batch_T):
-        # [B, 322, T]
         l = batch_T.size(1) / 2
         return batch_T[:,l:,:]
     
     def lpb_f(self, batch_T):
-        # [B, 322, T]
         l = batch_T.size(1) / 2
         return batch_T[:,:l,:]
  
@@ -184,6 +213,13 @@ class Trainer:
                 loss=f"{mean_loss:.5f}"
             )
 
+            if self.checkpoint_dir is not None:
+                self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                torch.save(
+                    self.model.state_dict(),
+                    self.checkpoint_dir / f"epoch_{epoch_n + 1}.pt"
+                )
+
         return epoch_losses
 
     def _initial_hidden(self, batch_size): 
@@ -227,14 +263,12 @@ class Trainer:
                 B = features.size(0)
                 T = features.size(2)
 
-                # New audio sequences -> reset GRU states
                 h01, h02 = self._initial_hidden(B)
 
                 predictions = []
 
                 for t in range(T):
 
-                    # [B, 322] -> [B, 1, 322]
                     x_t = features[:, :, t].unsqueeze(1)
 
                     pred_t, h01, h02 = self.model(
@@ -243,18 +277,15 @@ class Trainer:
                         h02
                     )
 
-                    # [B, 1, 161] -> [B, 161]
                     predictions.append(
                         pred_t.squeeze(1)
                     )
 
-                # [B, 161, T]
                 mask = torch.stack(
                     predictions,
                     dim=2
                 )
 
-                # Apply predicted suppression mask
                 enhanced_mag = mask * mic_mag
 
                 loss = torch.nn.functional.mse_loss(
@@ -271,7 +302,6 @@ class Trainer:
 
         mean_loss = total_loss / total_samples
 
-        # Put model back into training mode
         self.model.train()
 
         return mean_loss
