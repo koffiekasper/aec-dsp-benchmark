@@ -4,7 +4,7 @@ import torch
 
 from tqdm.auto import tqdm
 
-from src.Evaluation.ERLE import erle
+from src.ERLE import erle
 
 
 class AdaptiveFilterEvaluator:
