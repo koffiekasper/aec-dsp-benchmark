@@ -109,6 +109,7 @@ class Trainer:
             desc="Training",
             position=0
         )
+        epoch_losses = []
 
         for epoch_n in epoch_bar:
 
@@ -177,10 +178,13 @@ class Trainer:
                 )
 
             mean_loss = epoch_loss / len(train_dataloader)
+            epoch_losses.append(mean_loss)
 
             epoch_bar.set_postfix(
                 loss=f"{mean_loss:.5f}"
             )
+
+        return epoch_losses
 
     def _initial_hidden(self, batch_size): 
         h01 = torch.zeros( 1, batch_size, self.hidden_size, device=self.device, ) 
