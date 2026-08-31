@@ -1,11 +1,12 @@
 from src.XiaModel.Dataset import AECDataset
-from src.XiaModel.PreProcess import OnlineFDNormalizer, STFTLogScaler, InverseSTFT
+from src.XiaModel.PreProcess import OnlineFDNormalizer, STFTLogScaler
 
 from pathlib import Path
 
 import torch
 from torch.nn import MSELoss
 from torch.utils.data import DataLoader, Subset
+import random
 
 
 from tqdm.auto import tqdm, trange
@@ -27,7 +28,7 @@ class Trainer:
                  device=None,
                  checkpoint_dir=None,
                  ):
-        self.dataset = AECDataset(data_path, seed, n)
+        self.dataset = AECDataset(data_path, seed)
 
         self.train_dataset, self.test_dataset = self.split_by_guid(
             self.dataset,
@@ -36,7 +37,8 @@ class Trainer:
         )
         
         self.model = model
-        n_features = self.dataset[0]['length']
+        n_features = self.dataset.crop_n
+
         self.FDNorm = OnlineFDNormalizer(n_features)
         
         self.hidden_size = hidden_size
