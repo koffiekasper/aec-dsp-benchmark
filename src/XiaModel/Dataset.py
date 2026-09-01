@@ -32,9 +32,7 @@ class AECDataset(Dataset):
         self.path = Path(path)
         self.crop_n = sample_rate * chunk_seconds
         self.ser_range = ser_range
-
-        if seed is not None:
-            random.seed(seed)
+        self._rng = random.Random(seed)
 
         self.df = self._build_df()
 
@@ -95,21 +93,36 @@ class AECDataset(Dataset):
 
         return torch.from_numpy(x)
 
-    def _crop(self, *xs):
+    def _crop(self, *xs, seed=None):
         n = min(map(len, xs))
         xs = [x[:n] for x in xs]
 
         if n >= self.crop_n:
-            start = random.randint(0, n - self.crop_n)
-            return [x[start:start + self.crop_n] for x in xs]
+            if seed is not None:
+                rng = random.Random(seed)
+            else:
+                rng = self._rng
+
+            start = rng.randint(0, n - self.crop_n)
+
+            return [
+                x[start:start + self.crop_n]
+                for x in xs
+            ]
 
         return [
             F.pad(x, (0, self.crop_n - n))
             for x in xs
         ]
 
+    def set_crop_seed(self, seed):
+        self._rng = random.Random(seed)
+
+    def clear_crop_seed(self):
+        self._rng = random.Random()
+
     def _mix(self, near, echo):
-        ser_db = random.uniform(*self.ser_range)
+        ser_db = self._rng.uniform(*self.ser_range)
 
         near_rms = near.square().mean().sqrt()
         echo_rms = echo.square().mean().sqrt()

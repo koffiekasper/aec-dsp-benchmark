@@ -3,6 +3,8 @@ from src.XiaModel.PreProcess import OnlineFDNormalizer, STFTLogScaler
 
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import torch
 from torch.nn import MSELoss
 from torch.utils.data import DataLoader, Subset
@@ -10,6 +12,7 @@ import random
 
 
 from tqdm.auto import tqdm, trange
+from src.ERLE import erle
 
 class Trainer:
     def __init__(self, 
@@ -72,6 +75,25 @@ class Trainer:
             n_fft=self.dtf_size,
             hop=self.hop,
             window_l=self.window_l,
+        )
+
+    def eval_preprocess(self, batch):
+        features, mic_mag, near_mag = self.preprocess(batch)
+
+        mic = torch.stack([x["mic"] for x in batch])
+        scenarios = [x["scenario"] for x in batch]
+        supervised = [
+            bool(x.get("supervised", True))
+            for x in batch
+        ]
+
+        return (
+            features,
+            mic_mag,
+            near_mag,
+            mic,
+            scenarios,
+            supervised,
         )
         
     def target_f(self, batch_T):
@@ -223,14 +245,35 @@ class Trainer:
         test_dataloader = DataLoader(
             dataset=self.test_dataset,
             batch_size=batch_size,
-            collate_fn=self.preprocess,
+            collate_fn=self.eval_preprocess,
             shuffle=False
         )
 
         self.model.eval()
 
-        total_loss = 0.0
-        total_samples = 0
+        rows = []
+
+        ERLE_TYPES = {
+            "farend",
+            "farend_move",
+        }
+
+        TYPE_ORDER = [
+            "farend",
+            "farend_move",
+            "nearend",
+            "synthetic_dt",
+            "synthetic_dt_move",
+        ]
+
+        window = torch.sqrt(
+            torch.hann_window(
+                self.window_l,
+                periodic=True,
+                dtype=torch.float32,
+                device=self.device,
+            )
+        )
 
         batch_bar = tqdm(
             test_dataloader,
@@ -240,11 +283,19 @@ class Trainer:
 
         with torch.inference_mode():
 
-            for features, mic_mag, near_mag in batch_bar:
+            for (
+                features,
+                mic_mag,
+                near_mag,
+                mic,
+                scenarios,
+                supervised,
+            ) in batch_bar:
 
                 features = features.to(self.device)
                 mic_mag = mic_mag.to(self.device)
                 near_mag = near_mag.to(self.device)
+                mic = mic.to(self.device)
 
                 B = features.size(0)
                 T = features.size(2)
@@ -254,7 +305,6 @@ class Trainer:
                 predictions = []
 
                 for t in range(T):
-
                     x_t = features[:, :, t].unsqueeze(1)
 
                     pred_t, h01, h02 = self.model(
@@ -274,20 +324,129 @@ class Trainer:
 
                 enhanced_mag = mask * mic_mag
 
-                loss = torch.nn.functional.mse_loss(
+                mse_scores = torch.nn.functional.mse_loss(
                     enhanced_mag,
-                    near_mag
+                    near_mag,
+                    reduction="none"
+                ).mean(dim=(1, 2))
+
+                mic_spec = torch.stft(
+                    mic,
+                    n_fft=self.dtf_size,
+                    hop_length=self.hop,
+                    win_length=self.window_l,
+                    window=window,
+                    center=False,
+                    return_complex=True,
                 )
 
-                total_loss += loss.item() * B
-                total_samples += B
+                enhanced_spec = mask * mic_spec
 
-                batch_bar.set_postfix(
-                    loss=f"{loss.item():.5f}"
+                frames = torch.fft.irfft(
+                    enhanced_spec,
+                    n=self.dtf_size,
+                    dim=1,
                 )
 
-        mean_loss = total_loss / total_samples
+                frames = frames * window.view(
+                    1,
+                    -1,
+                    1
+                )
+
+                output_length = (
+                    self.dtf_size
+                    + (T - 1) * self.hop
+                )
+
+                enhanced = torch.zeros(
+                    B,
+                    output_length,
+                    device=self.device,
+                )
+
+                norm = torch.zeros_like(
+                    enhanced
+                )
+
+                window_sq = window.square()
+
+                for t in range(T):
+                    start = t * self.hop
+                    end = start + self.dtf_size
+
+                    enhanced[:, start:end] += (
+                        frames[:, :, t]
+                    )
+
+                    norm[:, start:end] += (
+                        window_sq
+                    )
+
+                enhanced = enhanced / norm.clamp(
+                    min=1e-8
+                )
+
+                length = min(
+                    mic.size(1),
+                    enhanced.size(1)
+                )
+
+                for i in range(B):
+                    scenario = scenarios[i]
+
+                    if scenario in ERLE_TYPES:
+                        erle_score = erle(
+                            mic[i, :length].cpu(),
+                            enhanced[i, :length].cpu()
+                        )
+                    else:
+                        erle_score = np.nan
+
+                    if supervised[i]:
+                        mse_score = mse_scores[i].item()
+                    else:
+                        mse_score = np.nan
+
+                    rows.append({
+                        "Type": scenario,
+                        "ERLE": erle_score,
+                        "MSE": mse_score,
+                    })
+
+        sample_df = pd.DataFrame(rows)
+
+        result = (
+            sample_df
+            .groupby(
+                "Type",
+                as_index=False,
+                sort=False
+            )
+            .agg({
+                "ERLE": "mean",
+                "MSE": "mean",
+            })
+        )
+
+        order = {
+            name: i
+            for i, name in enumerate(TYPE_ORDER)
+        }
+
+        result["_order"] = (
+            result["Type"]
+            .map(order)
+            .fillna(len(order))
+        )
+
+        result = (
+            result
+            .sort_values("_order")
+            .drop(columns="_order")
+            .reset_index(drop=True)
+        )
 
         self.model.train()
 
-        return mean_loss
+        return result
