@@ -5,7 +5,7 @@ Specifically, we implement Least-Mean Squares (LMS), Normalized Least-Mean Squar
 [comment]: <> ([ ***TODO: RESULTS AT A GLANCE HERE*** ]:)
 
 ## Problem definition 
-Acoustic Echo Cancellation (AEC) uses signal processing algorithms to counteract unwanted delayed repetitions of sound. Its commonly applied to voice calls, wherein an audio speaker on a device may inadvertedly leak audio back into the device's microphone. 
+Acoustic Echo Cancellation (AEC) uses signal processing algorithms to counteract unwanted delayed repetitions of sound. It's commonly applied to voice calls, wherein an audio speaker on a device may inadvertently leak audio back into the device's microphone. 
 
 Formally, the microphone signal as observed by the AEC system is 
 $$d[n] = h[n] * x[n] + s[n] + v[n]$$
@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/f9233aa0-66b6-4f41-8ac6-a477da4b71b7
 **Least-Mean Squares (LMS):**
 LMS models the acoustic echo path as an adaptive Finite Impulse Response (FIR) filter with $M$ coefficients. At each timestep, the filter takes the most recent $M$ samples of the far-end reference signal,
 $$\mathbf{x}_n = [x[n], x[n-1], \ldots, x[n-M+1]]^T$$
-and produces an estimate of an echo
+and produces an estimate of the echo
 
 $$\hat y [n] = \mathbf{w}_n^T \mathbf{x}_n$$
 
@@ -55,7 +55,7 @@ The figure below compares the true echo path with the coefficients learned by LM
 *Echo-path identification sanity check. The known synthetic room impulse response is shown above, followed by the echo paths estimated by LMS and NLMS.*
 
 ## Deep Learning AEC
-We adapt an architecture based on the baseline noise suppression model in the [ICASSP 2023 Challenge Paper](https://www.researchgate.net/publication/366205532_ICASSP_2023_ACOUSTIC_ECHO_CANCELLATION_CHALLENGE). A recurrent neural network with two Gated Recurrent Units (GRU) takes a log power scaled concatenation of spectral features of the far-end signal, and that of a summation of the near-end and far-end signals as input. We parameterize the short-term fourier transformations with a 20 ms frame size and a hop size of 10 ms, making it a 320 point fourier transform with a hop length of 160. The two recurrent layers are followed by a linear layer, which predicts a spectral mask as output. A sigmoid activation constrains the mask to $[0,1]$, after which it is multiplied point-wise with the microphone magnitude spectrogram to suppress far-end echo while preserving near-end speech.  We obtain our loss by evaluating the MSE between the magnitude-spectrograms of the predicted and near-end microphone signals. We use the Adam optimizer with a learning rate of 0.002 to train our model.
+We adapt an architecture based on the baseline noise suppression model in the [ICASSP 2023 Challenge Paper](https://www.researchgate.net/publication/366205532_ICASSP_2023_ACOUSTIC_ECHO_CANCELLATION_CHALLENGE). A recurrent neural network with two Gated Recurrent Unit (GRU) layers takes a log power scaled concatenation of spectral features of the far-end signal, and that of a summation of the near-end and far-end signals as input. We parameterize the short-time Fourier transforms (STFTs) with a 20 ms frame size and a hop size of 10 ms, making it a 320-point Fourier transform with a hop length of 160. The two recurrent layers are followed by a linear layer, which predicts a spectral mask as output. A sigmoid activation constrains the mask to $[0,1]$, after which it is multiplied point-wise with the microphone magnitude spectrogram to suppress far-end echo while preserving near-end speech.  We obtain our loss by evaluating the MSE between the magnitude-spectrograms of the predicted and near-end microphone signals. We use the Adam optimizer with a learning rate of 0.002 to train our model.
 
 **Echo gain during training:** To expose the model to varying echo strengths, we randomly scale the far-end microphone signal before mixing:
 
@@ -64,7 +64,7 @@ $$d[n] = g \cdot x_{\text{echo}}[n] + s[n]$$
 where $g$ is a randomly sampled gain. This prevents the model from overfitting to a fixed echo-to-speech ratio and improves robustness across different echo levels.
 
 ## Dataset
-The experiments are evaluated on the real-world segment of the [ICASSP 2023 Challenge Dataset](https://www.researchgate.net/publication/366205532_ICASSP_2023_ACOUSTIC_ECHO_CANCELLATION_CHALLENGE), using an 80-20 train-test split. To avoid data leakage over different modes (near-end single, doubletalk, etc.) we deliberately sample our split based on a recording's GUID. To enable batch learning, we guarantee each processed sample to be the same length by randomly cropping a four second segment out, and padding with zeros on audio samples with shorter durations. In order to give LMS and NLMS more time to converge, we extend this cropping to ten seconds during inference.
+The experiments are evaluated on the real-world segment of the [ICASSP 2023 Challenge Dataset](https://www.researchgate.net/publication/366205532_ICASSP_2023_ACOUSTIC_ECHO_CANCELLATION_CHALLENGE), using an 80/20 train-test split. To avoid data leakage over different modes (near-end single, doubletalk, etc.) we deliberately sample our split based on a recording's GUID. To enable batch learning, we guarantee each processed sample to be the same length by randomly cropping a four-second segment out, and padding with zeros on audio samples with shorter durations. In order to give LMS and NLMS more time to converge, we extend this cropping to ten seconds during inference.
 
 ## Experiment setup
 Based on the AEC scenario (singletalk, doubletalk) we evaluate the following metrics:
@@ -108,6 +108,7 @@ Based on these results, the final NLMS configuration used:
 
 - learning rate: `0.5`
 - filter length: `1350` taps
+<!-- Verify final NLMS filter length: 1350 taps is not one of the sweep values shown above. -->
 
 ### Deep AEC model parameters
 We train our Deep AEC model with the following configuration:
@@ -165,7 +166,7 @@ The table below summarizes the final evaluation results for the Deep AEC model a
       <td>—</td>
       <td>0.000035</td>
       <td>—</td>
-      <td><b>0<b\></td>
+      <td><b>0</b></td>
       <td>—</td>
       <td><b>0</b></td>
     </tr>
@@ -201,7 +202,7 @@ The table below summarizes the final evaluation results for the Deep AEC model a
 
 ### Training convergence
 
-The Deep AEC models' training loss consistently trends downwards over the full 50 epoch training trajectory, indicating that the model succesfully learned to predict spectral masks that more closely reconstruct the near-end target magnitude spectrum.
+The Deep AEC models' training loss consistently trends downwards over the full 50 epoch training trajectory, indicating that the model successfully learned to predict spectral masks that more closely reconstruct the near-end target magnitude spectrum.
 
 ![Deep AEC Training Loss](images/aec_train_loss.png)
 
@@ -209,8 +210,17 @@ The Deep AEC models' training loss consistently trends downwards over the full 5
 
 
 ## Discussion
-**TODO: ECHO SUPPRESSION GRAPH TO ILLUSTRATE WHY DEEP EXCELS WHERE FIR FAILS**
+Across the echo-containing scenarios, the Deep AEC model substantially outperforms the classical baselines on ERLE and MSE. In near-end single-talk, LMS and NLMS achieve zero MSE because the far-end reference is silent, while Deep AEC achieves a similarly low MSE of 0.000035
 
-**TODO: SPECTROGRAM COMPARISON TO ILLUSTRATE THE DIFFERENCE BETWEN AEC AND NLMS**
+We also see that the classical models struggle to keep up with more complex tasks, such as echo reduction when movement is present, or doubletalk scenarios. For movement, this makes sense, given that the classical models work by learning the RIR as their filter. The performance of our Deep AEC model degrades less on movement tasks, showing itself to be relatively more adaptive to more complex scenarios.
 
-**TODO: FAILURE CASES: FIR LENGTH LIMITATION, CROP**
+The image below highlights an inherent disadvantage during inference of the classical AEC models; they need an arbitrary number of samples to adjust their filter to the signal's acoustic RIR. Particularly for NLMS, we observe it failing to perform in line with the other models for the first two seconds, after which its performance falls in line with LMS. 
+In contrast, the Deep AEC model is advantaged in that it has been extensively trained prior to inference, while its GRU state still makes it capable of adjusting during runtime.
+
+![Echo Suppression over Time](images/echo_suppression_over_time.png)
+
+*The classical models require time to adapt their filter to the signal's acoustic RIR.*
+
+The image below shows spectrograms produced with each model's output, and the ground-truth, respectively. In line with the results, the Deep AEC output more closely resembles the ground truth than the classical methods. 
+
+![Spectrograms](images/spectroram_comparison.png)
