@@ -12,7 +12,9 @@ class LMS:
         d = d.astype(np.float64)[:n_time]
         
         if self.mu == None:
-            _, self.mu  = self._find_mu(f) 
+            mu, _  = self._find_mu(f)
+        else:
+            mu = self.mu
 
         y = np.zeros(n_time)
         
@@ -23,7 +25,7 @@ class LMS:
 
             e = d[n] - y_n
 
-            self.b = self.b + self.mu * e * f_window
+            self.b = self.b + mu * e * f_window
         
         return d - y
 
@@ -34,6 +36,9 @@ class LMS:
         )
 
         max_energy = np.max(np.sum(X * X, axis=1))
+
+        if max_energy == 0:
+            return 0.0, 0.0
 
         mu_max = 2.0 / max_energy
         return safety * mu_max, mu_max

@@ -1,9 +1,10 @@
 import numpy as np
 
 class NLMS:
-    def __init__(self, M = 1280, lr=0.5):
+    def __init__(self, M = 1280, lr=0.5, eps=1e-3):
         self.M = M
         self.lr = lr
+        self.eps = eps
 
     def fit_transform(self, f, d):
         self.b = np.zeros(self.M)
@@ -19,7 +20,7 @@ class NLMS:
             y[n] = y_n
 
             e = d[n] - y_n
-            energy = np.dot(f_window, f_window) + 1e-8
+            energy = np.dot(f_window, f_window) + self.eps
 
             self.b += (self.lr / energy) * e * f_window
              
