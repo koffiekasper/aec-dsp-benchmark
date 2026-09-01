@@ -14,8 +14,8 @@ AEC aims to preserve or restore near-end speech while suppressing far-end acoust
 
 In **far-end singletalk** scenarios, no near-end speech is present, and the AEC method should simply suppress the microphone signal. In **double-talk** scenarios, near-end speech is present and should be preserved.
 
-<video src="images/inference_sequence.mp4" controls width="800">
-</video>
+https://github.com/user-attachments/assets/f9233aa0-66b6-4f41-8ac6-a477da4b71b7
+
 
 *An AEC infers echo-cancellation sequentially and on the go.*
 
